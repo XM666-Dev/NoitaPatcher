@@ -68,6 +68,8 @@ struct ComponentUpdator_vtable {
 
 struct ComponentUpdator {
     ComponentUpdator_vtable* vtable;
+    char offset[32];
+    float step;
 };
 
 struct SystemManager {
@@ -139,6 +141,17 @@ struct Message_UseItem {
 
 using send_message_use_item_t = void(__stdcall*)(Entity*, Message_UseItem*);
 
+struct AudioManager
+{
+    char offset[136];
+    struct StudioSystem *studio_system;
+};
+
+struct AudioEngine
+{
+    char offset[40];
+    AudioManager *audio_manager;
+};
 
 struct GameGlobal {
     int frame_num;
@@ -147,7 +160,9 @@ struct GameGlobal {
     void* mGridWorld;
     void* mTextures;
     struct CellFactory* mCellFactory;
-    char unknown2[44];
+    char unknown2[8];
+    AudioEngine *audio_engine;
+    char unknown3[32];
     int* pause_state;
 };
 

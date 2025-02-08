@@ -804,6 +804,308 @@ int ComponentUpdatesSetEnabled(lua_State* L)
     return 1;
 }
 
+#include <array>
+#include <algorithm>
+template <size_t size>
+struct Buffer : std::array<byte, size>
+{
+    template <size_t size_appended>
+    Buffer<size + size_appended> operator+(const Buffer<size_appended> &appended) const
+    {
+        Buffer<size + size_appended> buffer;
+        std::copy(this->begin(), this->end(), buffer.begin());
+        std::copy(appended.begin(), appended.end(), buffer.begin() + size);
+        return buffer;
+    }
+
+    friend Buffer<size + 1> operator+(const Buffer &buffer, byte byte)
+    {
+        Buffer<size + 1> new_buffer;
+        std::copy(buffer.begin(), buffer.end(), new_buffer.begin());
+        new_buffer.back() = byte;
+        return new_buffer;
+    }
+
+    friend Buffer<size + 1> operator+(byte byte, const Buffer &buffer)
+    {
+        Buffer<size + 1> new_buffer;
+        std::copy(buffer.begin(), buffer.end(), new_buffer.begin() + 1);
+        new_buffer.front() = byte;
+        return new_buffer;
+    }
+};
+const byte NOP = 0x90;
+
+int ComponentUpdatesSetStep(lua_State *L)
+{
+    auto system_name_ = ulua_checkstringview(L, 1);
+    double change_to = lua_tonumber(L, 2);
+
+    std::string system_name{system_name_};
+
+    std::string search = "class " + system_name;
+
+    for (auto &&system : system_manager->mSystems)
+    {
+        if (system->vtable->get_system_name(system).as_view() == search)
+        {
+            auto address = (void **)&system->vtable->update_components;
+            auto &buffer = (Buffer<5> &)*((byte *)*address + 0x82);
+            if (buffer == Buffer<5>{0xF3, 0x0F, 0x11, 0x47, 0x24})
+            {
+                DWORD prot_restore;
+                VirtualProtect(&buffer, sizeof(buffer), PAGE_EXECUTE_READWRITE, &prot_restore);
+                buffer.fill(NOP);
+                VirtualProtect(&buffer, sizeof(buffer), prot_restore, &prot_restore);
+            }
+
+            system->step = change_to;
+
+            lua_pushboolean(L, true);
+            return 1;
+        }
+    }
+
+    lua_pushboolean(L, false);
+    return 1;
+}
+
+Buffer<5> *game_global_update_call;
+Buffer<5> *game_world_update_call;
+Buffer<4> game_global_update;
+Buffer<4> game_world_update;
+void find_deathmatch_funcs()
+{
+    void *deathmatch_update = ((void **)g_deathmatch->application_vtable)[3];
+    executable_info noita = ThisExecutableInfo::get();
+    auto pattern = make_pattern(
+        Bytes{0xE8}, Pad{4},
+        Bytes{0x8B, 0xC8},
+        Bytes{0xE8}, Capture{"GameGlobalUpdate", 4},
+        Bytes{0xF3, 0x0F, 0x10, 0x4D, 0x08},
+        Bytes{0x8B, 0x4E, 0x20},
+        Bytes{0xE8}, Capture{"GameWorldUpdate", 4},
+        Bytes{0x8B, 0x4E, 0x24},
+        Bytes{0x85, 0xC9},
+        Bytes{0x74, 0x10});
+    auto result = pattern.search(noita, deathmatch_update, noita.text_end);
+    if (!result)
+    {
+        std::cerr << "Couldn't find deathmatch funcs\n";
+        return;
+    }
+    game_global_update_call = (Buffer<5> *)((byte *)result.capture_ptr("GameGlobalUpdate") - 1);
+    game_world_update_call = (Buffer<5> *)((byte *)result.capture_ptr("GameWorldUpdate") - 1);
+    game_global_update = result.get<Buffer<4>>("GameGlobalUpdate");
+    game_world_update = result.get<Buffer<4>>("GameWorldUpdate");
+}
+
+int EnableGameGlobalUpdate(lua_State *L)
+{
+    if (!game_global_update_call)
+        return 0;
+
+    bool change_to = lua_toboolean(L, 1);
+
+    auto &buffer = *game_global_update_call;
+    auto value_to_write = change_to ? 0xE8 + game_global_update : Buffer<5>{NOP, NOP, NOP, NOP, NOP};
+    DWORD prot_restore;
+    VirtualProtect(&buffer, sizeof(buffer), PAGE_EXECUTE_READWRITE, &prot_restore);
+    buffer = value_to_write;
+    VirtualProtect(&buffer, sizeof(buffer), prot_restore, &prot_restore);
+    return 0;
+}
+
+int EnableGameWorldUpdate(lua_State *L)
+{
+    if (!game_world_update_call)
+        return 0;
+
+    bool change_to = lua_toboolean(L, 1);
+
+    auto &buffer = *game_world_update_call;
+    auto value_to_write = change_to ? 0xE8 + game_world_update : Buffer<5>{NOP, NOP, NOP, NOP, NOP};
+    DWORD prot_restore;
+    VirtualProtect(&buffer, sizeof(buffer), PAGE_EXECUTE_READWRITE, &prot_restore);
+    buffer = value_to_write;
+    VirtualProtect(&buffer, sizeof(buffer), prot_restore, &prot_restore);
+    return 0;
+}
+
+struct StudioSystem;
+struct System;
+struct DSP;
+struct ChannelControl
+{
+};
+struct Channel : ChannelControl
+{
+};
+struct ChannelGroup : ChannelControl
+{
+};
+struct Sound;
+typedef enum FMOD_DSP_TYPE
+{
+    FMOD_DSP_TYPE_UNKNOWN,
+    FMOD_DSP_TYPE_MIXER,
+    FMOD_DSP_TYPE_OSCILLATOR,
+    FMOD_DSP_TYPE_LOWPASS,
+    FMOD_DSP_TYPE_ITLOWPASS,
+    FMOD_DSP_TYPE_HIGHPASS,
+    FMOD_DSP_TYPE_ECHO,
+    FMOD_DSP_TYPE_FADER,
+    FMOD_DSP_TYPE_FLANGE,
+    FMOD_DSP_TYPE_DISTORTION,
+    FMOD_DSP_TYPE_NORMALIZE,
+    FMOD_DSP_TYPE_LIMITER,
+    FMOD_DSP_TYPE_PARAMEQ,
+    FMOD_DSP_TYPE_PITCHSHIFT,
+    FMOD_DSP_TYPE_CHORUS,
+    FMOD_DSP_TYPE_VSTPLUGIN,
+    FMOD_DSP_TYPE_WINAMPPLUGIN,
+    FMOD_DSP_TYPE_ITECHO,
+    FMOD_DSP_TYPE_COMPRESSOR,
+    FMOD_DSP_TYPE_SFXREVERB,
+    FMOD_DSP_TYPE_LOWPASS_SIMPLE,
+    FMOD_DSP_TYPE_DELAY,
+    FMOD_DSP_TYPE_TREMOLO,
+    FMOD_DSP_TYPE_LADSPAPLUGIN,
+    FMOD_DSP_TYPE_SEND,
+    FMOD_DSP_TYPE_RETURN,
+    FMOD_DSP_TYPE_HIGHPASS_SIMPLE,
+    FMOD_DSP_TYPE_PAN,
+    FMOD_DSP_TYPE_THREE_EQ,
+    FMOD_DSP_TYPE_FFT,
+    FMOD_DSP_TYPE_LOUDNESS_METER,
+    FMOD_DSP_TYPE_ENVELOPEFOLLOWER,
+    FMOD_DSP_TYPE_CONVOLUTIONREVERB,
+    FMOD_DSP_TYPE_CHANNELMIX,
+    FMOD_DSP_TYPE_TRANSCEIVER,
+    FMOD_DSP_TYPE_OBJECTPAN,
+    FMOD_DSP_TYPE_MULTIBAND_EQ,
+    FMOD_DSP_TYPE_MAX
+} FMOD_DSP_TYPE;
+typedef enum FMOD_DSP_LOWPASS
+{
+    FMOD_DSP_LOWPASS_CUTOFF,
+    FMOD_DSP_LOWPASS_RESONANCE
+} FMOD_DSP_LOWPASS;
+typedef enum FMOD_DSP_PITCHSHIFT
+{
+    FMOD_DSP_PITCHSHIFT_PITCH,
+    FMOD_DSP_PITCHSHIFT_FFTSIZE,
+    FMOD_DSP_PITCHSHIFT_OVERLAP,
+    FMOD_DSP_PITCHSHIFT_MAXCHANNELS
+} FMOD_DSP_PITCHSHIFT;
+DSP *lowpass;
+DSP *pitchshift;
+int SetAudioPitch(lua_State *L)
+{
+    static auto fmod = LoadLibrary("fmod.dll");
+    static auto fmodstudio = LoadLibrary("fmodstudio.dll");
+    static int(__stdcall * StudioSystem_getCoreSystem)(StudioSystem *, System **) = (int(__stdcall *)(StudioSystem *, System **))GetProcAddress(fmodstudio, "?getCoreSystem@System@Studio@FMOD@@QBG?AW4FMOD_RESULT@@PAPAV13@@Z");
+    static int(__stdcall * System_getMasterChannelGroup)(System *, ChannelGroup **) = (int(__stdcall *)(System *, ChannelGroup **))GetProcAddress(fmod, "?getMasterChannelGroup@System@FMOD@@QAG?AW4FMOD_RESULT@@PAPAVChannelGroup@2@@Z");
+    static int(__stdcall * System_createDSPByType)(System *, FMOD_DSP_TYPE, DSP **) = (int(__stdcall *)(System *, FMOD_DSP_TYPE, DSP **))GetProcAddress(fmod, "?createDSPByType@System@FMOD@@QAG?AW4FMOD_RESULT@@W4FMOD_DSP_TYPE@@PAPAVDSP@2@@Z");
+    static int(__stdcall * DSP_setParameterFloat)(DSP *, int, float) = (int(__stdcall *)(DSP *, int, float))GetProcAddress(fmod, "?setParameterFloat@DSP@FMOD@@QAG?AW4FMOD_RESULT@@HM@Z");
+    static int(__stdcall * DSP_getParameterFloat)(DSP *, int, float *, char *, int) = (int(__stdcall *)(DSP *, int, float *, char *, int))GetProcAddress(fmod, "?getParameterFloat@DSP@FMOD@@QAG?AW4FMOD_RESULT@@HPAMPADH@Z");
+    static int(__stdcall * ChannelControl_setVolume)(ChannelControl *, float) = (int(__stdcall *)(ChannelControl *, float))GetProcAddress(fmod, "?setVolume@ChannelControl@FMOD@@QAG?AW4FMOD_RESULT@@M@Z");
+    static int(__stdcall * ChannelControl_setPitch)(ChannelControl *, float) = (int(__stdcall *)(ChannelControl *, float))GetProcAddress(fmod, "?setPitch@ChannelControl@FMOD@@QAG?AW4FMOD_RESULT@@M@Z");
+    static int(__stdcall * ChannelControl_addDSP)(ChannelControl *, int, DSP *) = (int(__stdcall *)(ChannelControl *, int, DSP *))GetProcAddress(fmod, "?addDSP@ChannelControl@FMOD@@QAG?AW4FMOD_RESULT@@HPAVDSP@2@@Z");
+    static int(__stdcall * Channel_setFrequency)(Channel *, float) = (int(__stdcall *)(Channel *, float))GetProcAddress(fmod, "?setFrequency@Channel@FMOD@@QAG?AW4FMOD_RESULT@@M@Z");
+    static int(__stdcall * Channel_getFrequency)(Channel *, float *) = (int(__stdcall *)(Channel *, float *))GetProcAddress(fmod, "?getFrequency@Channel@FMOD@@QAG?AW4FMOD_RESULT@@PAM@Z");
+    static int(__stdcall * Channel_getCurrentSound)(Channel *, Sound **) = (int(__stdcall *)(Channel *, Sound **))GetProcAddress(fmod, "?getCurrentSound@Channel@FMOD@@QAG?AW4FMOD_RESULT@@PAPAVSound@2@@Z");
+    static int(__stdcall * ChannelGroup_getNumChannels)(ChannelGroup *, int *) = (int(__stdcall *)(ChannelGroup *, int *))GetProcAddress(fmod, "?getNumChannels@ChannelGroup@FMOD@@QAG?AW4FMOD_RESULT@@PAH@Z");
+    static int(__stdcall * ChannelGroup_getChannel)(ChannelGroup *, int, Channel **) = (int(__stdcall *)(ChannelGroup *, int, Channel **))GetProcAddress(fmod, "?getChannel@ChannelGroup@FMOD@@QAG?AW4FMOD_RESULT@@HPAPAVChannel@2@@Z");
+    static int(__stdcall * ChannelGroup_getNumGroups)(ChannelGroup *, int *) = (int(__stdcall *)(ChannelGroup *, int *))GetProcAddress(fmod, "?getNumGroups@ChannelGroup@FMOD@@QAG?AW4FMOD_RESULT@@PAH@Z");
+    static int(__stdcall * ChannelGroup_getGroup)(ChannelGroup *, int, ChannelGroup **) = (int(__stdcall *)(ChannelGroup *, int, ChannelGroup **))GetProcAddress(fmod, "?getGroup@ChannelGroup@FMOD@@QAG?AW4FMOD_RESULT@@HPAPAV12@@Z");
+    static int(__stdcall * Sound_setMusicSpeed)(Sound *, float) = (int(__stdcall *)(Sound *, float))GetProcAddress(fmod, "?setMusicSpeed@Sound@FMOD@@QAG?AW4FMOD_RESULT@@M@Z");
+    static ChannelGroup *channelgroup;
+    static DSP *dsp;
+    static struct Initializer
+    {
+        Initializer()
+        {
+            System *system;
+            StudioSystem_getCoreSystem(get_game_global()->audio_engine->audio_manager->studio_system, &system);
+            System_getMasterChannelGroup(system, &channelgroup);
+
+            // System_createDSPByType(system, FMOD_DSP_TYPE_PITCHSHIFT, &dsp);
+            // ChannelControl_addDSP(channelgroup, 0, dsp);
+            // set_range(dsp, FMOD_DSP_PITCHSHIFT_PITCH, -INFINITY, INFINITY);
+
+            // 创建并添加低通滤波器
+            System_createDSPByType(system, FMOD_DSP_TYPE_LOWPASS, &lowpass);
+            ChannelControl_addDSP(channelgroup, 0, lowpass);
+
+            // 创建并添加变速效果
+            System_createDSPByType(system, FMOD_DSP_TYPE_PITCHSHIFT, &pitchshift);
+            ChannelControl_addDSP(channelgroup, 0, pitchshift);
+            set_range(pitchshift, FMOD_DSP_PITCHSHIFT_PITCH, -INFINITY, INFINITY);
+        }
+        static void set_range(DSP *dsp, int index, float min, float max)
+        {
+            byte *p0 = *(byte **)((byte *)dsp + 164);
+            byte **p1 = *(byte ***)(p0 + 76);
+            byte *p2 = p1[index];
+            *(float *)(p2 + 40) = min;
+            *(float *)(p2 + 44) = max;
+        }
+        static void set_frequency(ChannelGroup *channelgroup, float frequency)
+        {
+            int numchannels;
+            ChannelGroup_getNumChannels(channelgroup, &numchannels);
+            for (int i = 0; i < numchannels; ++i)
+            {
+                Channel *channel;
+                ChannelGroup_getChannel(channelgroup, i, &channel);
+                Channel_setFrequency(channel, 48000.0f * frequency);
+            }
+            int numgroups;
+            ChannelGroup_getNumGroups(channelgroup, &numgroups);
+            for (int i = 0; i < numgroups; ++i)
+            {
+                ChannelGroup *childchannelgroup;
+                ChannelGroup_getGroup(channelgroup, i, &childchannelgroup);
+                set_frequency(childchannelgroup, frequency);
+            }
+        }
+    } initializer;
+    // ChannelControl_setPitch(channelgroup, lua_tonumber(L, 1));
+    // DSP_setParameterFloat(dsp, FMOD_DSP_PITCHSHIFT_PITCH, lua_tonumber(L, 2));
+    // Initializer::set_frequency(channelgroup, lua_tonumber(L, 3));
+    double scale = lua_tonumber(L, 1);
+    DSP_setParameterFloat(lowpass, FMOD_DSP_LOWPASS_CUTOFF, scale * 5000.0); // 控制低通滤波器
+    // DSP_setParameterFloat(pitchshift, FMOD_DSP_PITCHSHIFT_PITCH, scale);      // 控制变速效果
+    return 0;
+}
+
+static struct Platform *platform;
+void find_platform()
+{
+    executable_info noita = ThisExecutableInfo::get();
+    auto pattern = make_pattern(
+        Bytes{0xE8}, Pad{4},
+        Bytes{0x68}, Pad{4},
+        Bytes{0xC7, 0x05}, Capture{"Platform", 4}, Pad{4},
+        Bytes{0xE8}, Pad{4},
+        Bytes{0x59},
+        Bytes{0xC3});
+    auto result = pattern.search(noita, noita.text_start, noita.text_end);
+    if (!result)
+    {
+        std::cerr << "Couldn't find Platform\n";
+        return;
+    }
+    platform = result.get<Platform *>("Platform");
+}
+
+int GetPlatform(lua_State *L)
+{
+    lua_pushinteger(L, (int)platform);
+    return 1;
+}
+
 int SetPauseState(lua_State* L)
 {
     int value = luaL_checkinteger(L, 1);
@@ -877,6 +1179,11 @@ static const luaL_Reg nplib[] = {
     {"EnableLogFiltering", EnableLogFiltering},
     {"EnablePCallErrorFilter", EnablePCallErrorFilter},
     {"ComponentUpdatesSetEnabled", ComponentUpdatesSetEnabled},
+    {"ComponentUpdatesSetStep", ComponentUpdatesSetStep},
+    {"EnableGameGlobalUpdate", EnableGameGlobalUpdate},
+    {"EnableGameWorldUpdate", EnableGameWorldUpdate},
+    {"SetAudioPitch", SetAudioPitch},
+    {"GetPlatform", GetPlatform},
     {"SerializeEntity", np::SerializeEntity},
     {"DeserializeEntity", np::DeserializeEntity},
     {"PhysBodySetTransform", np::PhysBodySetTransform},
@@ -943,6 +1250,8 @@ int luaopen_noitapatcher(lua_State* L)
         find_duplicate_pixel_scene_check();
         find_system_manager();
         find_entity_serialisation();
+        find_deathmatch_funcs();
+        find_platform();
 
         GlobalExtensions::instance().add_extension("CrossCall", np::CrossCall);
 

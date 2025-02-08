@@ -22,6 +22,8 @@ if (MINGW)
     set(CMAKE_FIND_LIBRARY_SUFFIXES .dll ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif()
 
+set(LUA_INCLUDE_DIR "D:/Resources/Lua/include")
+set(LUA_LIBRARIES "D:/Resources/Lua/lib")
 find_package(Lua REQUIRED)
 
 
@@ -49,4 +51,5 @@ set(ABSL_USE_EXTERNAL_GOOGLETEST ON CACHE BOOL "")
 FetchContent_MakeAvailable(absl)
 
 
+set(Boost_INCLUDE_DIR "D:/Resources/boost")
 find_package(Boost 1.78 REQUIRED COMPONENTS system)
