@@ -1,7 +1,10 @@
-# NoitaPatcher
+# NoitaPatcherEx
 
 Unofficial Noita modding API extension.
 
-You can download NoitaPatcher from the releases: https://github.com/dextercd/NoitaPatcher/releases
-
-The releases contains documentation and it's also available online: https://dexter.döpping.eu/NoitaPatcher
+Extended funcs compared to the original:
+ComponentUpdatesSetStep( system_name:string, change_to:number ) -> change_succeeded:bool
+EnableGameGlobalUpdate( enabled:bool )
+EnableGameWorldUpdate( enabled:bool )
+SetAudioPitch( pitch:number, pitchshift:number, frequency:number ) [Deprecated.]
+GetPlatform() -> p_platform:int
